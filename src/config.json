@@ -1,0 +1,93 @@
+{
+  "mqtt": {
+    "host": "localhost",
+    "port": 1883,
+    "username": "root",
+    "password": "root"
+  },
+  "messageService": {
+    "mail": {
+      "host": "localhost",
+      "port": 25,
+      "from": "\"MQTTwatcher\" <mqttwatcher@localhost>"
+    },
+    "sms": {
+      "sid": "",
+      "token": "",
+      "service": ""
+    }
+  },
+  "watchList": [
+    {
+      "id": "door",
+      "topic": "zigbee2mqtt/DoorWindowSensor",
+      "enabled": true,
+      "events": [
+        {
+          "subject": "contact",
+          "default": true,
+          "conditions": [
+            {
+              "value": false,
+              "log": "New door status received: OPEN",
+              "message": "Frontdoor open!",
+              "warningThreshold": 360,
+              "warningMessage": "Warning: Frontdoor open since >5min!"
+            },
+            {
+              "value": true,
+              "log": "New door status received: CLOSED",
+              "message": "Frontdoor closed!"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "floor",
+      "topic": "zigbee2mqtt/MotionSensor",
+      "enabled": true,
+      "events": [
+        {
+          "subject": "occupancy",
+          "default": false,
+          "conditions": [
+            {
+              "value": true,
+              "log": "Corridor motion detected!",
+              "message": "Corridor motion detected!",
+              "reset": 30
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notificationList": [
+    {
+      "id": "door",
+      "recipients": [
+        {
+          "type": "SMS",
+          "enabled": true,
+          "recipient": "+49123123456789"
+        },
+        {
+          "type": "MAIL",
+          "enabled": true,
+          "recipient": "mymail@provider.com"
+        }
+      ]
+    },
+    {
+      "id": "floor",
+      "recipients": [
+        {
+          "type": "MAIL",
+          "enabled": true,
+          "recipient": "mymail@provider.com"
+        }
+      ]
+    }
+  ]
+}

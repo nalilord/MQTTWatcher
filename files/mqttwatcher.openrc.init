@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+depend() {
+        need mosquitto
+}
+
+start() {
+        ebegin "Starting ${SVCNAME}"
+        supervise-daemon ${SVCNAME} --start \
+                --env LOG_PATH=/var/log/${SVCNAME} \
+                --chdir /opt/mqttwatcher \
+                --pidfile /run/${SVCNAME}.pid \
+                node /opt/mqttwatcher/MQTTWatcher.js
+        eend $?
+}
+
+stop() {
+        ebegin "Stopping ${SVCNAME}"
+        supervise-daemon ${SVCNAME} --stop \
+                --pidfile /run/${SVCNAME}.pid \
+                --retry 60
+        eend $?
+}

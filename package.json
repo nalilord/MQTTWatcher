@@ -1,0 +1,21 @@
+{
+  "name": "mqttwatcher",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/nodemailer": "^6.4.14",
+    "async-mqtt": "^2.6.3",
+    "debug": "^4.3.4",
+    "mqtt": "^5.3.4",
+    "nodemailer": "^6.9.8",
+    "twilio": "^5.0.0-rc.1",
+    "winston": "^3.11.0"
+  }
+}
