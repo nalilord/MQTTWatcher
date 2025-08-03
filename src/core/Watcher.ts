@@ -217,6 +217,12 @@ export class Watcher extends BaseClassLog {
     protected executeConditionHandler(condition: EventCondition, event: EventItem, eventValue: string) {
         this.log("info", condition.log, this.messageListId);
 
+        if (this.eventStatus[event.subject].lastValue !== eventValue) {
+            this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info");
+        } else {
+            this.log("debug", "No message send, repeated condition/event value! (" + eventValue + ")", this.messageListId);
+        }
+
         if (condition.warningThreshold && condition.warningThreshold > 0) {
             this.log("debug", `Warning threshold (${condition.warningThreshold}) defined, setting timeout`, this.messageListId);
 
@@ -226,12 +232,6 @@ export class Watcher extends BaseClassLog {
                     condition.warningThreshold * 1000
                 );
         } else {
-            if (this.eventStatus[event.subject].lastValue !== eventValue) {
-                this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info");
-            } else {
-                this.log("debug", "No message send, repeated condition/event value! (" + eventValue + ")", this.messageListId);
-            }
-
             if (this.eventStatus[event.subject].warningTimeout != null)
                 clearTimeout(this.eventStatus[event.subject].warningTimeout!);
             this.eventStatus[event.subject].warningTimeout = null;
