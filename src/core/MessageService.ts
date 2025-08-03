@@ -1,4 +1,4 @@
-import config from "../config.json";
+import config from "./MQTTConfig";
 
 import {BaseClassLog} from "./MQTTLog";
 const nodemailer = require("nodemailer");

@@ -6,6 +6,9 @@
 /dst/config.json
 /dst/*.js
 /dst/core/*.js
+/dist/config.json
+/dist/*.js
+/dist/core/*.js
 
 # dependencies
 /node_modules

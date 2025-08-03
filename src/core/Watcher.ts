@@ -1,4 +1,4 @@
-import config from "../config.json";
+import config from "./MQTTConfig";
 import { MessageService, NotificationMethod } from "./MessageService";
 import mqtt, { MqttClient } from "mqtt";
 import { BaseClassLog } from "./MQTTLog";
