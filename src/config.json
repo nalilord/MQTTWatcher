@@ -26,6 +26,18 @@
         {
           "subject": "contact",
           "default": true,
+          "activeHours": [
+            {
+              "from": "22:00",
+              "to": "06:00"
+            }
+          ],
+          "dependencies": [
+            {
+              "path": "floor.occupancy",
+              "state": true
+            }
+          ],
           "conditions": [
             {
               "value": false,

@@ -1,21 +1,26 @@
 {
   "name": "mqttwatcher",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Smart MQTT event processor with conditional notifications.",
+  "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "deploy": "./deploy.sh"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["mqtt", "watcher", "notifications", "openrc"],
+  "license": "MIT",
   "dependencies": {
-    "@types/nodemailer": "^6.4.14",
     "async-mqtt": "^2.6.3",
     "debug": "^4.3.4",
     "mqtt": "^5.3.4",
     "nodemailer": "^6.9.8",
     "twilio": "^5.0.0-rc.1",
     "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/nodemailer": "^6.4.14",
+    "typescript": "^5.4.0"
   }
 }

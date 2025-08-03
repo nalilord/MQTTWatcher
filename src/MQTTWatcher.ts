@@ -1,26 +1,60 @@
-import * as config from "./config.json";
-import {logger} from "./core/MQTTLog";
-import {NotificationMethod, MessageService} from "./core/MessageService";
-import {Watcher} from "./core/Watcher";
-import {Watchdog} from "./core/Watchdog";
+import rawConfig from "./core/MQTTConfig";
+import { logger } from "./core/MQTTLog";
+import { NotificationMethod, MessageService } from "./core/MessageService";
+import { Watcher } from "./core/Watcher";
+import { Watchdog } from "./core/Watchdog";
 
-logger.info("MQTTWatcher initializing", {module: "Core"});
+type Config = typeof rawConfig;
 
-let msgSvc: MessageService = new MessageService();
-let watchdog: Watchdog = new Watchdog();
+class MQTTWatcherApp {
+    private msgSvc: MessageService;
+    private watchdog: Watchdog;
 
-for (let i = 0; i < config.notificationList.length; i++) {
-    for (let j = 0; j < config.notificationList[i].recipients.length; j++) {
-        if(config.notificationList[i].recipients[j].enabled)
-            msgSvc.addRecipient(NotificationMethod.fromString(config.notificationList[i].recipients[j].type),config.notificationList[i].id, config.notificationList[i].recipients[j].recipient);
+    constructor(private config: Config) {
+        this.msgSvc = new MessageService();
+        this.watchdog = new Watchdog();
+    }
+
+    public start(): void {
+        logger.info("MQTTWatcher initializing", { module: "Core" });
+
+        if (!Array.isArray(this.config.notificationList) || !Array.isArray(this.config.watchList)) {
+            logger.error("Configuration error: notificationList and watchList must be arrays", { module: "Core" });
+            process.exit(1);
+        }
+
+        this.setupNotifications();
+        this.setupWatchers();
+        this.watchdog.run();
+
+        logger.info("MQTTWatcher started", { module: "Core" });
+
+        process.on("SIGINT", () => {
+            logger.info("MQTTWatcher shutting down gracefully", { module: "Core" });
+            process.exit(0);
+        });
+    }
+
+    private setupNotifications(): void {
+        for (const item of this.config.notificationList) {
+            for (const recipient of item.recipients) {
+                if (recipient.enabled) {
+                    const method = NotificationMethod.fromString(recipient.type);
+                    const minSeverity = recipient.minSeverity ?? "info";
+                    this.msgSvc.addRecipient(method, item.id, recipient.recipient, minSeverity);
+                }
+            }
+        }
+    }
+
+    private setupWatchers(): void {
+        for (const item of this.config.watchList) {
+            if (item.enabled) {
+                this.watchdog.add(new Watcher(this.msgSvc, item.id, item.topic, item.events));
+            }
+        }
     }
 }
 
-for (let i = 0; i < config.watchList.length; i++) {
-    if(config.watchList[i].enabled)
-        watchdog.add(new Watcher(msgSvc, config.watchList[i].id, config.watchList[i].topic, config.watchList[i].events));
-}
-
-watchdog.run();
-
-logger.info("MQTTWatcher started",{module: "Core"});
+const app = new MQTTWatcherApp(rawConfig);
+app.start();

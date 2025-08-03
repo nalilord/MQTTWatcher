@@ -19,6 +19,7 @@ export namespace NotificationMethod {
 interface NotificationListItem {
     method: NotificationMethod;
     recipient: string;
+    minSeverity?: "debug" | "info" | "warning" | "critical";
 }
 
 export class MessageService extends BaseClassLog {
@@ -32,21 +33,41 @@ export class MessageService extends BaseClassLog {
         this.list = {};
     }
 
-    public addRecipient(method: NotificationMethod, listId: string, recipient: string) {
+    public addRecipient(method: NotificationMethod, listId: string, recipient: string, minSeverity: "debug" | "info" | "warning" | "critical" = "info") {
         this.log("debug", "Add new recipient (" + NotificationMethod[method] + ":" + recipient + ") for ID: " + listId);
 
         if(!this.list[listId])
             this.list[listId] = [];
-        this.list[listId].push({method, recipient});
+        this.list[listId].push({method, recipient, minSeverity});
     }
 
-    public sendNotifications(listId: string, message: string, filter?: NotificationMethod[]) {
+    // Overloads
+    public sendNotifications(listId: string, message: string, severity: string): void;
+    public sendNotifications(listId: string, message: string, filter?: NotificationMethod[]): void;
+
+    public sendNotifications(listId: string, message: string, filterOrSeverity?: NotificationMethod[] | string): void {
         this.log("debug", "Sending notifications for ID: " + listId);
+
+        const severityOrder = { debug: 0, info: 1, warning: 2, critical: 3 };
 
         if(this.list[listId]) {
             for (let i = 0; i < this.list[listId].length; i++) {
-                if(!(typeof(filter) !== 'undefined') || (typeof(filter) !== 'undefined' && filter.indexOf(this.list[listId][i].method) >= 0))
-                    this.sendNotification(this.list[listId][i].method, message, this.list[listId][i].recipient);
+                const item = this.list[listId][i];
+
+                if (Array.isArray(filterOrSeverity)) {
+                    if(filterOrSeverity.includes(item.method)) {
+                        this.sendNotification(item.method, message, item.recipient);
+                    }
+                } else if (typeof filterOrSeverity === 'string') {
+                    const level = severityOrder[filterOrSeverity] ?? 1;
+                    const minLevel = severityOrder[item.minSeverity ?? 'info'] ?? 1;
+
+                    if (level >= minLevel) {
+                        this.sendNotification(item.method, message, item.recipient);
+                    }
+                } else {
+                    this.sendNotification(item.method, message, item.recipient);
+                }
             }
         }
     }
