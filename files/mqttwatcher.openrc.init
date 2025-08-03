@@ -15,10 +15,10 @@ start() {
     supervise-daemon "${SVCNAME}" --start \
         --env LOG_PATH="/var/log/${SVCNAME}" \
         --env CONFIG_FILE="/etc/mqttwatcher/config.json" \
-        --chdir "/opt/mqttwatcher" \
+        --chdir "/opt/mqttwatcher/dist/" \
         --pidfile "/run/${SVCNAME}.pid" \
         --respawn-delay 5 --respawn-max 3 \
-        node "/opt/mqttwatcher/index.js"
+        node "/opt/mqttwatcher/dist/MQTTWatcher.js"
     eend $?
 }
 
