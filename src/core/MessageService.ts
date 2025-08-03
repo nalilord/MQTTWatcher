@@ -1,4 +1,4 @@
-import * as config from "../config.json";
+import config from "../config.json";
 
 import {BaseClassLog} from "./MQTTLog";
 const nodemailer = require("nodemailer");
@@ -12,7 +12,10 @@ export enum NotificationMethod {
 
 export namespace NotificationMethod {
     export function fromString(value: string): NotificationMethod {
-        return NotificationMethod[value];
+        if (!(value in NotificationMethod)) {
+            throw new Error(`Invalid NotificationMethod: ${value}`);
+        }
+        return NotificationMethod[value as keyof typeof NotificationMethod] as NotificationMethod;
     }
 }
 
@@ -59,7 +62,7 @@ export class MessageService extends BaseClassLog {
                         this.sendNotification(item.method, message, item.recipient);
                     }
                 } else if (typeof filterOrSeverity === 'string') {
-                    const level = severityOrder[filterOrSeverity] ?? 1;
+                    const level = severityOrder[filterOrSeverity as keyof typeof severityOrder] ?? 1;
                     const minLevel = severityOrder[item.minSeverity ?? 'info'] ?? 1;
 
                     if (level >= minLevel) {

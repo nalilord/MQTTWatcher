@@ -1,4 +1,4 @@
-import * as config from "../config.json";
+import config from "../config.json";
 import { MessageService, NotificationMethod } from "./MessageService";
 import mqtt, { MqttClient } from "mqtt";
 import { BaseClassLog } from "./MQTTLog";
@@ -24,9 +24,9 @@ interface EventCondition {
 
 interface EventStatus {
     lastValue: string;
-    lastHandledValue: string;
-    warningTimeout: NodeJS.Timeout;
-    resetTimeout: NodeJS.Timeout;
+    lastHandledValue: string | null;
+    warningTimeout: NodeJS.Timeout | null;
+    resetTimeout: NodeJS.Timeout | null;
     warningDone: boolean;
 }
 
@@ -56,9 +56,9 @@ export class Watcher extends BaseClassLog {
     protected mqttHost: string = "mqtt://" + config.mqtt.username + ":" + config.mqtt.password + "@" + config.mqtt.host + ":" + config.mqtt.port;
     protected mqttTopic: string = "";
 
-    protected client: MqttClient = null;
-    protected msgSvc: MessageService = null;
-    protected messageListId: string = null;
+    protected client: MqttClient | null = null;
+    protected msgSvc: MessageService | null = null;
+    protected messageListId: string | null = null;
     protected events: EventItem[];
     protected eventStatus: EventStatusList;
 
@@ -79,15 +79,15 @@ export class Watcher extends BaseClassLog {
     }
 
     private initializeEvents() {
-        this.events.forEach(function (event: EventItem) {
+        this.events.forEach((event: EventItem) => {
             this.eventStatus[event.subject] = {
-                lastValue: String(event.default).valueOf(),
+                lastValue: String(event.default),
                 lastHandledValue: null,
                 warningTimeout: null,
                 resetTimeout: null,
                 warningDone: false
             };
-        }.bind(this));
+        });
     }
 
     public run(): boolean {
@@ -95,20 +95,24 @@ export class Watcher extends BaseClassLog {
 
         this.client.on("disconnect", () => {
             this.log("warn", "MQTT disconnected", this.messageListId);
-            this.client.end();
+            this.client?.end();
             setTimeout(this.run.bind(this), 2500);
         });
 
         this.client.on("error", (error) => {
             this.log("error", "MQTT error: " + error.message, this.messageListId);
-            this.client.end();
+            this.client?.end();
             setTimeout(this.run.bind(this), 2500);
         });
 
         this.client.on("connect", () => {
             this.log("info", "MQTT connected (" + config.mqtt.host + ":" + config.mqtt.port + ")", this.messageListId);
-            this.client.subscribe(this.mqttTopic, (err: Error) => {
-                this.log("info", "MQTT subscribed (" + this.mqttTopic + ")", this.messageListId);
+            this.client?.subscribe(this.mqttTopic, {}, (err: Error | null, granted) => {
+                if (err) {
+                    this.log("error", "Subscribe error: " + err.message, this.messageListId);
+                } else {
+                    this.log("info", "MQTT subscribed (" + this.mqttTopic + ")", this.messageListId);
+                }
             });
         });
 
@@ -116,7 +120,7 @@ export class Watcher extends BaseClassLog {
             if (topic == this.mqttTopic) {
                 this.log("info", "MQTT new topic message: " + message.toString(), this.messageListId);
 
-                let data: JSON = null;
+                let data: Record<string, any> | null = null;
                 try {
                     data = JSON.parse(message.toString());
                 } catch (e) {
@@ -135,24 +139,24 @@ export class Watcher extends BaseClassLog {
                         }
 
                         if (!this.isInActiveHours(event)) {
-                            this.log("debug", `Event '${event.subject}' ignored: outside activeHours`, this.messageListId);
+                            this.log("debug", `Event '"${event.subject}"' ignored: outside activeHours`, this.messageListId);
                             return;
                         }
 
                         if (!this.dependenciesSatisfied(event)) {
-                            this.log("debug", `Event '${event.subject}' ignored: unmet dependencies`, this.messageListId);
+                            this.log("debug", `Event '"${event.subject}"' ignored: unmet dependencies`, this.messageListId);
                             return;
                         }
 
                         this.log("debug", "Found matching property for Event subject '" + event.subject + "', checking #" + event.conditions.length + " conditions...", this.messageListId);
 
-                        const val = String(data[event.subject]).valueOf();
-                        GlobalEventStore.update(this.messageListId, event.subject, val);
+                        const val = String(data[event.subject]);
+                        GlobalEventStore.update(this.messageListId!, event.subject, val);
 
                         event.conditions.forEach((condition: EventCondition) => {
-                            let match = this.compareValues(condition.value, data[event.subject]);
+                            let match = this.compareValues(condition.value, data![event.subject]);
                             if (match) {
-                                this.log("debug", `Valid condition found, executing handler with severity '${condition.severity ?? "info"}'`, this.messageListId);
+                                this.log("debug", `Valid condition found, executing handler with severity '"${condition.severity ?? "info"}"'`, this.messageListId);
                                 this.executeConditionHandler(condition, event, val);
                                 this.eventStatus[event.subject].lastHandledValue = val;
                                 this.log("debug", "Last handled event value changed to '" + this.eventStatus[event.subject].lastHandledValue + "'.", this.messageListId);
@@ -186,8 +190,8 @@ export class Watcher extends BaseClassLog {
         const minutes = now.getHours() * 60 + now.getMinutes();
 
         return event.activeHours.some(({ from, to }) => {
-            const [fh, fm] = from.split(":").map(Number);
-            const [th, tm] = to.split(":").map(Number);
+            const [fh, fm] = from.split(":" ).map(Number);
+            const [th, tm] = to.split(":" ).map(Number);
             const fromMin = fh * 60 + fm;
             const toMin = th * 60 + tm;
             return fromMin <= toMin
@@ -201,7 +205,7 @@ export class Watcher extends BaseClassLog {
         return event.dependencies.every(dep => {
             const parts = dep.path.split(".");
             if (parts.length !== 2) {
-                this.log("warn", `Invalid dependency path '${dep.path}'`, this.messageListId);
+                this.log("warn", `Invalid dependency path '"${dep.path}"'`, this.messageListId);
                 return false;
             }
             const [watchId, subject] = parts;
@@ -213,7 +217,7 @@ export class Watcher extends BaseClassLog {
         this.log("info", condition.log, this.messageListId);
 
         if (this.eventStatus[event.subject].lastValue != eventValue)
-            this.msgSvc.sendNotifications(this.messageListId, condition.message, condition.severity ?? "info")
+            this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info")
         else
             this.log("debug", "No message send, repeated condition/event value! (" + eventValue + ")", this.messageListId);
 
@@ -221,18 +225,18 @@ export class Watcher extends BaseClassLog {
             this.log("debug", "Warning threshold (" + condition.warningThreshold + ") defined, setting timeout for event warning!", this.messageListId);
 
             if (this.eventStatus[event.subject].warningTimeout == null)
-                this.eventStatus[event.subject].warningTimeout = setTimeout(this.warningConditionHandler.bind(this, event, eventValue, condition.warningMessage), condition.warningThreshold * 1000);
+                this.eventStatus[event.subject].warningTimeout = setTimeout(this.warningConditionHandler.bind(this, event, eventValue, condition.warningMessage!), condition.warningThreshold * 1000);
         } else {
             this.log("debug", "Warning threshold NOT defined, clearing timeout for event warning!", this.messageListId);
 
             if (this.eventStatus[event.subject].warningTimeout != null)
-                clearTimeout(this.eventStatus[event.subject].warningTimeout);
+                clearTimeout(this.eventStatus[event.subject].warningTimeout!);
             this.eventStatus[event.subject].warningTimeout = null;
             this.eventStatus[event.subject].warningDone = false;
         }
 
         if (this.eventStatus[event.subject].resetTimeout != null)
-            clearTimeout(this.eventStatus[event.subject].resetTimeout);
+            clearTimeout(this.eventStatus[event.subject].resetTimeout!);
         this.eventStatus[event.subject].resetTimeout = null;
 
         if (condition.reset && condition.reset > 0)
@@ -244,7 +248,7 @@ export class Watcher extends BaseClassLog {
 
         if (this.eventStatus[event.subject].warningTimeout != null && !this.eventStatus[event.subject].warningDone) {
             if (this.eventStatus[event.subject].lastValue == warningValue) {
-                this.msgSvc.sendNotifications(this.messageListId, warningMessage, "warning");
+                this.msgSvc!.sendNotifications(this.messageListId!, warningMessage, "warning");
             } else {
                 this.log("info", "Warning condition (" + event.subject + ": " + warningValue + " == " + this.eventStatus[event.subject].lastValue + ") on '" + this.messageListId + "' no longer valid, message not send!", this.messageListId);
             }
@@ -255,6 +259,6 @@ export class Watcher extends BaseClassLog {
 
     protected resetLastValueHandler(event: EventItem) {
         this.log("debug", "No new values, resetting last value for '" + event.subject + "' to default '" + event.default + "'.", this.messageListId);
-        this.eventStatus[event.subject].lastValue = String(event.default).valueOf();
+        this.eventStatus[event.subject].lastValue = String(event.default);
     }
 }

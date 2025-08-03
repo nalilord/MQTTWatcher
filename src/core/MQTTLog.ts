@@ -32,7 +32,7 @@ export abstract class BaseClassLog {
     protected constructor() {
     }
 
-    protected log(level: string, message: string, subModule?: string) {
+    protected log(level: string, message: string, subModule?: string | null) {
         let className: string = this.constructor['name'];
 
         if(typeof(subModule) !== "undefined") {
