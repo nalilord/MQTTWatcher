@@ -1,23 +1,31 @@
 #!/sbin/openrc-run
 
+description="MQTTWatcher smart event processor"
+
 depend() {
-        need mosquitto
+    need mosquitto
+}
+
+start_pre() {
+    checkpath -d -m 0755 -o root:root /var/log/${SVCNAME}
 }
 
 start() {
-        ebegin "Starting ${SVCNAME}"
-        supervise-daemon ${SVCNAME} --start \
-                --env LOG_PATH=/var/log/${SVCNAME} \
-                --chdir /opt/mqttwatcher \
-                --pidfile /run/${SVCNAME}.pid \
-                node /opt/mqttwatcher/MQTTWatcher.js
-        eend $?
+    ebegin "Starting ${SVCNAME}"
+    supervise-daemon "${SVCNAME}" --start \
+        --env LOG_PATH="/var/log/${SVCNAME}" \
+        --env CONFIG_FILE="/etc/mqttwatcher/config.json" \
+        --chdir "/opt/mqttwatcher" \
+        --pidfile "/run/${SVCNAME}.pid" \
+        --respawn-delay 5 --respawn-max 3 \
+        node "/opt/mqttwatcher/index.js"
+    eend $?
 }
 
 stop() {
-        ebegin "Stopping ${SVCNAME}"
-        supervise-daemon ${SVCNAME} --stop \
-                --pidfile /run/${SVCNAME}.pid \
-                --retry 60
-        eend $?
+    ebegin "Stopping ${SVCNAME}"
+    supervise-daemon "${SVCNAME}" --stop \
+        --pidfile "/run/${SVCNAME}.pid" \
+        --retry 60
+    eend $?
 }
