@@ -17,6 +17,7 @@ interface EventCondition {
     log: string;
     message: string;
     severity?: "debug" | "info" | "warning" | "critical";
+    warningSeverity?: "debug" | "info" | "warning" | "critical";
     warningThreshold?: number;
     warningMessage?: string;
     reset?: number;
@@ -156,7 +157,7 @@ export class Watcher extends BaseClassLog {
                         event.conditions.forEach((condition: EventCondition) => {
                             let match = this.compareValues(condition.value, data![event.subject]);
                             if (match) {
-                                this.log("debug", `Valid condition found, executing handler with severity '"${condition.severity ?? "info"}"'`, this.messageListId);
+                                this.log("debug", `Valid condition found, executing handler`, this.messageListId);
                                 this.executeConditionHandler(condition, event, val);
                                 this.eventStatus[event.subject].lastHandledValue = val;
                                 this.log("debug", "Last handled event value changed to '" + this.eventStatus[event.subject].lastHandledValue + "'.", this.messageListId);
@@ -216,18 +217,20 @@ export class Watcher extends BaseClassLog {
     protected executeConditionHandler(condition: EventCondition, event: EventItem, eventValue: string) {
         this.log("info", condition.log, this.messageListId);
 
-        if (this.eventStatus[event.subject].lastValue != eventValue)
-            this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info")
-        else
-            this.log("debug", "No message send, repeated condition/event value! (" + eventValue + ")", this.messageListId);
-
         if (condition.warningThreshold && condition.warningThreshold > 0) {
-            this.log("debug", "Warning threshold (" + condition.warningThreshold + ") defined, setting timeout for event warning!", this.messageListId);
+            this.log("debug", `Warning threshold (${condition.warningThreshold}) defined, setting timeout`, this.messageListId);
 
             if (this.eventStatus[event.subject].warningTimeout == null)
-                this.eventStatus[event.subject].warningTimeout = setTimeout(this.warningConditionHandler.bind(this, event, eventValue, condition.warningMessage!), condition.warningThreshold * 1000);
+                this.eventStatus[event.subject].warningTimeout = setTimeout(
+                    this.warningConditionHandler.bind(this, event, eventValue, condition),
+                    condition.warningThreshold * 1000
+                );
         } else {
-            this.log("debug", "Warning threshold NOT defined, clearing timeout for event warning!", this.messageListId);
+            if (this.eventStatus[event.subject].lastValue !== eventValue) {
+                this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info");
+            } else {
+                this.log("debug", "No message send, repeated condition/event value! (" + eventValue + ")", this.messageListId);
+            }
 
             if (this.eventStatus[event.subject].warningTimeout != null)
                 clearTimeout(this.eventStatus[event.subject].warningTimeout!);
@@ -243,14 +246,18 @@ export class Watcher extends BaseClassLog {
             this.eventStatus[event.subject].resetTimeout = setTimeout(this.resetLastValueHandler.bind(this, event), condition.reset * 1000);
     }
 
-    protected warningConditionHandler(event: EventItem, warningValue: string, warningMessage: string) {
-        this.log("info", "Threshold for warning condition at event '" + event.subject + "' on '" + this.messageListId + "' reached!", this.messageListId);
+    protected warningConditionHandler(event: EventItem, warningValue: string, condition: EventCondition) {
+        this.log("info", `Threshold for warning at event '"${event.subject}"' on '"${this.messageListId}"' reached!`, this.messageListId);
 
         if (this.eventStatus[event.subject].warningTimeout != null && !this.eventStatus[event.subject].warningDone) {
-            if (this.eventStatus[event.subject].lastValue == warningValue) {
-                this.msgSvc!.sendNotifications(this.messageListId!, warningMessage, "warning");
+            if (this.eventStatus[event.subject].lastValue === warningValue) {
+                this.msgSvc!.sendNotifications(
+                    this.messageListId!,
+                    condition.warningMessage ?? condition.message,
+                    condition.warningSeverity ?? "warning"
+                );
             } else {
-                this.log("info", "Warning condition (" + event.subject + ": " + warningValue + " == " + this.eventStatus[event.subject].lastValue + ") on '" + this.messageListId + "' no longer valid, message not send!", this.messageListId);
+                this.log("info", `Warning no longer valid (${event.subject}: ${warningValue} != ${this.eventStatus[event.subject].lastValue})`, this.messageListId);
             }
 
             this.eventStatus[event.subject].warningDone = true;
