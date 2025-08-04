@@ -107,70 +107,72 @@ export class Watcher extends BaseClassLog {
         });
 
         this.client.on("connect", () => {
-            this.log("info", "MQTT connected (" + config.mqtt.host + ":" + config.mqtt.port + ")", this.messageListId);
+            this.log("info", `MQTT connected (${config.mqtt.host}:${config.mqtt.port})`, this.messageListId);
             this.client?.subscribe(this.mqttTopic, {}, (err: Error | null, granted) => {
                 if (err) {
                     this.log("error", "Subscribe error: " + err.message, this.messageListId);
                 } else {
-                    this.log("info", "MQTT subscribed (" + this.mqttTopic + ")", this.messageListId);
+                    this.log("info", `MQTT subscribed to topic '${this.mqttTopic}'`, this.messageListId);
                 }
             });
         });
 
         this.client.on("message", (topic: string, message: buffer.Buffer) => {
-            if (topic == this.mqttTopic) {
-                this.log("info", "MQTT new topic message: " + message.toString(), this.messageListId);
+            this.log("info", `MQTT new topic message from '${topic}': ${message.toString()}`, this.messageListId);
 
-                let data: Record<string, any> | null = null;
-                try {
-                    data = JSON.parse(message.toString());
-                } catch (e) {
-                    this.log("debug", "Malformed JSON received, processing of message aborted!", this.messageListId);
-                }
-
-                if (data != null) {
-                    this.log("debug", "Processing #" + this.events.length + " events...", this.messageListId);
-
-                    this.events.forEach((event: EventItem) => {
-                        this.log("debug", "Processing Event for subject '" + event.subject + "'.", this.messageListId);
-
-                        if (!data.hasOwnProperty(event.subject)) {
-                            this.log("debug", "No matching property found for Event subject '" + event.subject + "'.", this.messageListId);
-                            return;
-                        }
-
-                        if (!this.isInActiveHours(event)) {
-                            this.log("debug", `Event '"${event.subject}"' ignored: outside activeHours`, this.messageListId);
-                            return;
-                        }
-
-                        if (!this.dependenciesSatisfied(event)) {
-                            this.log("debug", `Event '"${event.subject}"' ignored: unmet dependencies`, this.messageListId);
-                            return;
-                        }
-
-                        this.log("debug", "Found matching property for Event subject '" + event.subject + "', checking #" + event.conditions.length + " conditions...", this.messageListId);
-
-                        const val = String(data[event.subject]);
-                        GlobalEventStore.update(this.messageListId!, event.subject, val);
-
-                        event.conditions.forEach((condition: EventCondition) => {
-                            let match = this.compareValues(condition.value, data![event.subject]);
-                            if (match) {
-                                this.log("debug", `Valid condition found, executing handler`, this.messageListId);
-                                this.executeConditionHandler(condition, event, val);
-                                this.eventStatus[event.subject].lastHandledValue = val;
-                                this.log("debug", "Last handled event value changed to '" + this.eventStatus[event.subject].lastHandledValue + "'.", this.messageListId);
-                            } else {
-                                this.log("debug", "Not executing condition handler for unmatched value", this.messageListId);
-                            }
-                        });
-
-                        this.eventStatus[event.subject].lastValue = val;
-                        this.log("debug", "Last event value changed to '" + this.eventStatus[event.subject].lastValue + "'.", this.messageListId);
-                    });
-                }
+            let data: Record<string, any> | null = null;
+            try {
+                data = JSON.parse(message.toString());
+            } catch (e) {
+                this.log("debug", "Malformed JSON received, processing of message aborted!", this.messageListId);
+                return;
             }
+
+            if(!data) {
+                this.log("debug", "Malformed JSON received (null), processing of message aborted!", this.messageListId);
+                return;
+            }
+
+            this.log("debug", "Processing #" + this.events.length + " events...", this.messageListId);
+
+            this.events.forEach((event: EventItem) => {
+                this.log("debug", `Processing Event for subject '${event.subject}'`, this.messageListId);
+
+                if (!data.hasOwnProperty(event.subject)) {
+                    this.log("debug", `No matching property found for Event subject '${event.subject}'`, this.messageListId);
+                    return;
+                }
+
+                if (!this.isInActiveHours(event)) {
+                    this.log("debug", `Event '${event.subject}' ignored: outside activeHours`, this.messageListId);
+                    return;
+                }
+
+                if (!this.dependenciesSatisfied(event)) {
+                    this.log("debug", `Event '${event.subject}' ignored: unmet dependencies`, this.messageListId);
+                    return;
+                }
+
+                this.log("debug", `Found matching property for Event subject '${event.subject}', checking ${event.conditions.length} conditions`, this.messageListId);
+
+                const val = String(data[event.subject]);
+                GlobalEventStore.update(this.messageListId!, event.subject, val);
+
+                event.conditions.forEach((condition: EventCondition) => {
+                    let match = this.compareValues(condition.value, data![event.subject]);
+                    if (match) {
+                        this.log("debug", `Condition match: value = ${data![event.subject]}, executing handler`, this.messageListId);
+                        this.executeConditionHandler(condition, event, val);
+                        this.eventStatus[event.subject].lastHandledValue = val;
+                        this.log("debug", `Last handled value for '${event.subject}' updated to '${val}'`, this.messageListId);
+                    } else {
+                        this.log("debug", `Condition not matched for value = ${data![event.subject]}`, this.messageListId);
+                    }
+                });
+
+                this.eventStatus[event.subject].lastValue = val;
+                this.log("debug", `Last value for '${event.subject}' updated to '${val}'`, this.messageListId);
+            });
         });
 
         return true;
@@ -206,7 +208,7 @@ export class Watcher extends BaseClassLog {
         return event.dependencies.every(dep => {
             const parts = dep.path.split(".");
             if (parts.length !== 2) {
-                this.log("warn", `Invalid dependency path '"${dep.path}"'`, this.messageListId);
+                this.log("warn", `Invalid dependency path '${dep.path}'`, this.messageListId);
                 return false;
             }
             const [watchId, subject] = parts;
@@ -220,11 +222,11 @@ export class Watcher extends BaseClassLog {
         if (this.eventStatus[event.subject].lastValue !== eventValue) {
             this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info");
         } else {
-            this.log("debug", "No message send, repeated condition/event value! (" + eventValue + ")", this.messageListId);
+            this.log("debug", `Duplicate event value '${eventValue}' for subject '${event.subject}', no immediate notification sent`, this.messageListId);
         }
 
         if (condition.warningThreshold && condition.warningThreshold > 0) {
-            this.log("debug", `Warning threshold (${condition.warningThreshold}) defined, setting timeout`, this.messageListId);
+            this.log("debug", `Setting warning threshold of ${condition.warningThreshold} seconds for '${event.subject}'`, this.messageListId);
 
             if (this.eventStatus[event.subject].warningTimeout == null)
                 this.eventStatus[event.subject].warningTimeout = setTimeout(
@@ -247,7 +249,7 @@ export class Watcher extends BaseClassLog {
     }
 
     protected warningConditionHandler(event: EventItem, warningValue: string, condition: EventCondition) {
-        this.log("info", `Threshold for warning at event '"${event.subject}"' on '"${this.messageListId}"' reached!`, this.messageListId);
+        this.log("info", `Threshold for '${event.subject}' reached, evaluating warning condition`, this.messageListId);
 
         if (this.eventStatus[event.subject].warningTimeout != null && !this.eventStatus[event.subject].warningDone) {
             if (this.eventStatus[event.subject].lastValue === warningValue) {
@@ -257,7 +259,7 @@ export class Watcher extends BaseClassLog {
                     condition.warningSeverity ?? "warning"
                 );
             } else {
-                this.log("info", `Warning no longer valid (${event.subject}: ${warningValue} != ${this.eventStatus[event.subject].lastValue})`, this.messageListId);
+                this.log("info", `Skipping warning: current value '${this.eventStatus[event.subject].lastValue}' differs from warning value '${warningValue}'`, this.messageListId);
             }
 
             this.eventStatus[event.subject].warningDone = true;
@@ -265,7 +267,7 @@ export class Watcher extends BaseClassLog {
     }
 
     protected resetLastValueHandler(event: EventItem) {
-        this.log("debug", "No new values, resetting last value for '" + event.subject + "' to default '" + event.default + "'.", this.messageListId);
+        this.log("debug", `Resetting last value for '${event.subject}' to default '${event.default}'`, this.messageListId);
         this.eventStatus[event.subject].lastValue = String(event.default);
     }
 }
