@@ -214,7 +214,10 @@ export class Watcher extends BaseClassLog {
                 return false;
             }
             const [watchId, subject] = parts;
-            return GlobalEventStore.get(watchId, subject) === dep.state;
+            const actual = GlobalEventStore.get(watchId, subject);
+            const result = actual === dep.state;
+            this.log("debug", `Dependency check: ${dep.path} = ${actual}, expected ${dep.state} → ${result}`, this.messageListId);
+            return result;
         });
     }
 
