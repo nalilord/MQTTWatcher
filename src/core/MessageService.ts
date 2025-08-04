@@ -83,11 +83,13 @@ export class MessageService extends BaseClassLog {
                 this.logger.info(message);
             } break;
             case NotificationMethod.MAIL: {
+                const now = new Date().toISOString().replace("T", " ").replace(/\..+/, "");
+                const fullMessage = `[${now}] ${message}`;
                 this.mailTransport.sendMail({
                     from: config.messageService.mail.from,
                     to: recipient,
                     subject: "Notification Event",
-                    text: message
+                    text: fullMessage
                 });
             } break;
             case NotificationMethod.SMS: {
