@@ -88,6 +88,8 @@ export class Watcher extends BaseClassLog {
                 resetTimeout: null,
                 warningDone: false
             };
+
+            GlobalEventStore.update(this.messageListId!, event.subject, event.default);
         });
     }
 
