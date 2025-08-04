@@ -180,6 +180,16 @@ export class Watcher extends BaseClassLog {
         return true;
     }
 
+    protected normalizeValue(input: any): string | number | boolean {
+        if (typeof input === "string") {
+            if (input === "true") return true;
+            if (input === "false") return false;
+            if (!isNaN(Number(input))) return Number(input);
+            return input;
+        }
+        return input;
+    }
+
     protected compareValues(expected: any, actual: any): boolean {
         if (expected === undefined || expected === null) return true;
         if (typeof expected === "boolean") return expected == Boolean(actual);
@@ -214,8 +224,9 @@ export class Watcher extends BaseClassLog {
                 return false;
             }
             const [watchId, subject] = parts;
-            const actual = GlobalEventStore.get(watchId, subject);
-            const result = actual === dep.state;
+            const actual = this.normalizeValue(GlobalEventStore.get(watchId, subject));
+            const expected = this.normalizeValue(dep.state);
+            const result = actual === expected;
             this.log("debug", `Dependency check: ${dep.path} = ${actual}, expected ${dep.state} → ${result}`, this.messageListId);
             return result;
         });
