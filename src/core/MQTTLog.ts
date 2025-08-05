@@ -16,7 +16,7 @@ if(process.env.LOG_PATH) {
 export const logger: Logger = winston.createLogger({
     level: 'debug',
     format: combine(
-        timestamp({format: 'YYYY-MM-DD hh:mm:ss.SSS A'}),
+        timestamp({format: 'YYYY-MM-DD HH:mm:ss.SSS'}),
         printf((info: any) => `[${info.timestamp}] <${info.level}> (${info.module}): ${info.message}`)
     ),
     defaultMeta: {

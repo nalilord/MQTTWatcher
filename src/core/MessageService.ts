@@ -1,5 +1,4 @@
 import config from "./MQTTConfig";
-
 import {BaseClassLog} from "./MQTTLog";
 const nodemailer = require("nodemailer");
 const twilio = require("twilio")(config.messageService.sms.sid, config.messageService.sms.token);
@@ -78,13 +77,22 @@ export class MessageService extends BaseClassLog {
     public sendNotification(method: NotificationMethod, message: string, recipient: string) {
         this.log("debug", "Sending " + NotificationMethod[method] + " notification to: " + recipient);
 
+        // Local server timestamp (YYYY-MM-DD HH:mm:ss)
+        const now = new Date();
+        const timestamp = now.getFullYear() + "-" +
+            String(now.getMonth() + 1).padStart(2, "0") + "-" +
+            String(now.getDate()).padStart(2, "0") + " " +
+            String(now.getHours()).padStart(2, "0") + ":" +
+            String(now.getMinutes()).padStart(2, "0") + ":" +
+            String(now.getSeconds()).padStart(2, "0");
+
+        const fullMessage = `[${timestamp}] ${message}`;
+
         switch (method) {
             case NotificationMethod.LOG: {
-                this.logger.info(message);
+                this.logger.info(fullMessage);
             } break;
             case NotificationMethod.MAIL: {
-                const now = new Date().toISOString().replace("T", " ").replace(/\..+/, "");
-                const fullMessage = `[${now}] ${message}`;
                 this.mailTransport.sendMail({
                     from: config.messageService.mail.from,
                     to: recipient,
@@ -95,7 +103,7 @@ export class MessageService extends BaseClassLog {
             case NotificationMethod.SMS: {
                 twilio.messages
                     .create({
-                        body: message,
+                        body: fullMessage,
                         messagingServiceSid: config.messageService.sms.service,
                         to: recipient
                     });
