@@ -1,27 +1,14 @@
+// src/core/Watcher.ts
+
 import config from "./MQTTConfig";
-import { MessageService, NotificationMethod } from "./MessageService";
+import { MessageService } from "./MessageService";
 import mqtt, { MqttClient } from "mqtt";
 import { BaseClassLog } from "./MQTTLog";
 import * as buffer from "node:buffer";
+import { GlobalEventStore, EventUtils } from "./EventUtils";
+import { EventItem, EventCondition} from "./Events";
 
-interface EventItem {
-    subject: string;
-    default: any;
-    activeHours?: { from: string; to: string }[];
-    dependencies?: { path: string; state: any }[];
-    conditions: EventCondition[];
-}
-
-interface EventCondition {
-    value: any;
-    log: string;
-    message: string;
-    severity?: "debug" | "info" | "warning" | "critical";
-    warningSeverity?: "debug" | "info" | "warning" | "critical";
-    warningThreshold?: number;
-    warningMessage?: string;
-    reset?: number;
-}
+/** ====================== Types ====================== */
 
 interface EventStatus {
     lastValue: string;
@@ -32,25 +19,16 @@ interface EventStatus {
 }
 
 interface EventStatusList {
-    [index: string]: EventStatus;
+    [key: string]: EventStatus;
 }
 
-class GlobalEventStore {
-    private static data: Record<string, Record<string, any>> = {};
-
-    static update(watchId: string, subject: string, value: any) {
-        if (!this.data[watchId]) this.data[watchId] = {};
-        this.data[watchId][subject] = value;
-    }
-
-    static get(watchId: string, subject: string): any {
-        return this.data[watchId]?.[subject];
-    }
-
-    static debugLog(): void {
-        console.log("[GlobalEventStore]", JSON.stringify(this.data, null, 2));
-    }
+/** For edge/cooldown tracking per-condition per-source */
+interface ConditionState {
+    prevMatch: boolean;
+    lastSentAt: number; // epoch seconds
 }
+
+/** ====================== Watcher ====================== */
 
 export class Watcher extends BaseClassLog {
 
@@ -63,6 +41,9 @@ export class Watcher extends BaseClassLog {
     protected events: EventItem[];
     protected eventStatus: EventStatusList;
 
+    /** condition-level state for edge and cooldown */
+    protected conditionState: Record<string, ConditionState>;
+
     constructor(messageService: MessageService, messageListId: string, mqttTopic: string, events: EventItem[]) {
         super();
 
@@ -71,6 +52,7 @@ export class Watcher extends BaseClassLog {
         this.mqttTopic = mqttTopic;
         this.events = events;
         this.eventStatus = {} as EventStatusList;
+        this.conditionState = {};
 
         this.initializeEvents();
     }
@@ -80,16 +62,18 @@ export class Watcher extends BaseClassLog {
     }
 
     private initializeEvents() {
+        // For non-dynamic events without stateKey, initialize a single legacy bucket.
         this.events.forEach((event: EventItem) => {
-            this.eventStatus[event.subject] = {
-                lastValue: String(event.default),
-                lastHandledValue: null,
-                warningTimeout: null,
-                resetTimeout: null,
-                warningDone: false
-            };
-
-            GlobalEventStore.update(this.messageListId!, event.subject, event.default);
+            if (!event.dynamic && !event.stateKey) {
+                this.eventStatus[event.subject] = {
+                    lastValue: String(event.default),
+                    lastHandledValue: null,
+                    warningTimeout: null,
+                    resetTimeout: null,
+                    warningDone: false
+                };
+                GlobalEventStore.update(this.messageListId!, event.subject, event.default);
+            }
         });
     }
 
@@ -110,7 +94,7 @@ export class Watcher extends BaseClassLog {
 
         this.client.on("connect", () => {
             this.log("info", `MQTT connected (${config.mqtt.host}:${config.mqtt.port})`, this.messageListId);
-            this.client?.subscribe(this.mqttTopic, {}, (err: Error | null, granted) => {
+            this.client?.subscribe(this.mqttTopic, {}, (err: Error | null) => {
                 if (err) {
                     this.log("error", "Subscribe error: " + err.message, this.messageListId);
                 } else {
@@ -125,12 +109,11 @@ export class Watcher extends BaseClassLog {
             let data: Record<string, any> | null = null;
             try {
                 data = JSON.parse(message.toString());
-            } catch (e) {
+            } catch {
                 this.log("debug", "Malformed JSON received, processing of message aborted!", this.messageListId);
                 return;
             }
-
-            if(!data) {
+            if (!data) {
                 this.log("debug", "Malformed JSON received (null), processing of message aborted!", this.messageListId);
                 return;
             }
@@ -140,8 +123,9 @@ export class Watcher extends BaseClassLog {
             this.events.forEach((event: EventItem) => {
                 this.log("debug", `Processing Event for subject '${event.subject}'`, this.messageListId);
 
-                if (!data.hasOwnProperty(event.subject)) {
-                    this.log("debug", `No matching property found for Event subject '${event.subject}'`, this.messageListId);
+                const actual = EventUtils.getValueByPath(data!, event.subject);
+                if (typeof actual === "undefined") {
+                    this.log("debug", `No matching property found for Event subject path '${event.subject}'`, this.messageListId);
                     return;
                 }
 
@@ -155,47 +139,170 @@ export class Watcher extends BaseClassLog {
                     return;
                 }
 
-                this.log("debug", `Found matching property for Event subject '${event.subject}', checking ${event.conditions.length} conditions`, this.messageListId);
+                const valStr = String(actual);
+                const isDynamic = event.dynamic === true;
 
-                const val = String(data[event.subject]);
-                GlobalEventStore.update(this.messageListId!, event.subject, val);
+                const statusKey = this.computeStatusKey(event, data);
+                if (!isDynamic && statusKey && !this.eventStatus[statusKey]) {
+                    this.eventStatus[statusKey] = {
+                        lastValue: String(event.default),
+                        lastHandledValue: null,
+                        warningTimeout: null,
+                        resetTimeout: null,
+                        warningDone: false
+                    };
+                }
 
-                event.conditions.forEach((condition: EventCondition) => {
-                    let match = this.compareValues(condition.value, data![event.subject]);
-                    if (match) {
-                        this.log("debug", `Condition match: value = ${data![event.subject]}, executing handler`, this.messageListId);
-                        this.executeConditionHandler(condition, event, val);
-                        this.eventStatus[event.subject].lastHandledValue = val;
-                        this.log("debug", `Last handled value for '${event.subject}' updated to '${val}'`, this.messageListId);
+                if (!isDynamic) {
+                    GlobalEventStore.update(this.messageListId!, event.subject, valStr);
+                }
+
+                this.log("debug", `Found value for '${event.subject}': ${JSON.stringify(actual)} → checking ${event.conditions.length} conditions`, this.messageListId);
+
+                event.conditions.forEach((cond, condIdx) => {
+                    const matched = (typeof cond.condition === "string" && cond.condition.trim())
+                        ? EventUtils.evaluateExpression(cond.condition!, actual, data!)
+                        : EventUtils.compareValues(cond.value, actual);
+
+                    if (!matched && (cond.edge === "rising")) {
+                        const ckey = this.computeConditionKey(event, cond, condIdx, data);
+                        const st = this.conditionState[ckey] || { prevMatch: false, lastSentAt: 0 };
+                        st.prevMatch = false;
+                        this.conditionState[ckey] = st;
+                    }
+
+                    if (!matched) {
+                        this.log("debug", `Condition not matched for '${event.subject}' (value=${JSON.stringify(actual)})`, this.messageListId);
+                        return;
+                    }
+
+                    const logTxt = EventUtils.interpolate(cond.log, data!);
+                    this.log("info", logTxt, this.messageListId);
+
+                    const msgText = EventUtils.interpolate(cond.message, data!);
+
+                    const shouldByEdgeCooldown = this.shouldNotifyByEdgeCooldown(
+                        event, cond, condIdx, data, Date.now() / 1000
+                    );
+
+                    if (!shouldByEdgeCooldown) {
+                        this.log("debug", `Edge/cooldown suppressed notification for condition #${condIdx}`, this.messageListId);
+                        return;
+                    }
+
+                    if (isDynamic) {
+                        this.msgSvc!.sendNotifications(this.messageListId!, msgText, cond.severity ?? "info");
                     } else {
-                        this.log("debug", `Condition not matched for value = ${data![event.subject]}`, this.messageListId);
+                        const userControls = (cond.edge && cond.edge !== "level") || (cond.cooldownSec && cond.cooldownSec > 0);
+                        if (!userControls && statusKey) {
+                            const st = this.eventStatus[statusKey];
+                            if (st.lastValue !== valStr) {
+                                this.msgSvc!.sendNotifications(this.messageListId!, msgText, cond.severity ?? "info");
+                            } else {
+                                this.log("debug", `Duplicate event value '${valStr}' for key '${statusKey}', no immediate notification sent`, this.messageListId);
+                            }
+
+                            if (cond.warningThreshold && cond.warningThreshold > 0) {
+                                if (st.warningTimeout == null) {
+                                    const safeCond: EventCondition = {
+                                        ...cond,
+                                        warningMessage: cond.warningMessage ? EventUtils.interpolate(cond.warningMessage, data!) : cond.message
+                                    };
+                                    st.warningTimeout = setTimeout(
+                                        () => this.warningConditionHandler(event, statusKey!, valStr, safeCond),
+                                        cond.warningThreshold * 1000
+                                    );
+                                }
+                            } else {
+                                if (st.warningTimeout != null) clearTimeout(st.warningTimeout);
+                                st.warningTimeout = null;
+                                st.warningDone = false;
+                            }
+
+                            if (st.resetTimeout != null) clearTimeout(st.resetTimeout);
+                            st.resetTimeout = null;
+                            if (cond.reset && cond.reset > 0) {
+                                st.resetTimeout = setTimeout(
+                                    () => this.resetLastValueHandler(event, statusKey!),
+                                    cond.reset * 1000
+                                );
+                            }
+
+                            st.lastHandledValue = valStr;
+                            this.log("debug", `Last handled value for key '${statusKey}' updated to '${valStr}'`, this.messageListId);
+                        } else {
+                            this.msgSvc!.sendNotifications(this.messageListId!, msgText, cond.severity ?? "info");
+                        }
                     }
                 });
 
-                this.eventStatus[event.subject].lastValue = val;
-                this.log("debug", `Last value for '${event.subject}' updated to '${val}'`, this.messageListId);
+                if (!isDynamic && statusKey) {
+                    this.eventStatus[statusKey].lastValue = valStr;
+                    this.log("debug", `Last value for key '${statusKey}' updated to '${valStr}'`, this.messageListId);
+                }
             });
         });
 
         return true;
     }
 
-    protected normalizeValue(input: any): string | number | boolean {
-        if (typeof input === "string") {
-            if (input === "true") return true;
-            if (input === "false") return false;
-            if (!isNaN(Number(input))) return Number(input);
-            return input;
-        }
-        return input;
+    /** ====================== Edge/Cooldown ====================== */
+
+    protected computeConditionKey(event: EventItem, cond: EventCondition, condIdx: number, payload: any): string {
+        const base =
+            (cond.key && EventUtils.interpolate(cond.key, payload)) ||
+            (event.stateKey && EventUtils.interpolate(event.stateKey, payload)) ||
+            (payload?.tags && (payload.tags.host || payload.tags.path)
+                ? `${payload.tags.host ?? ""}:${payload.tags.path ?? ""}`
+                : event.subject);
+        return `${this.messageListId}::${event.subject}::${condIdx}::${base}`;
     }
 
-    protected compareValues(expected: any, actual: any): boolean {
-        if (expected === undefined || expected === null) return true;
-        if (typeof expected === "boolean") return expected == Boolean(actual);
-        if (typeof expected === "number") return expected == Number(actual);
-        if (typeof expected === "string") return expected == String(actual);
-        return false;
+    protected shouldNotifyByEdgeCooldown(
+        event: EventItem,
+        cond: EventCondition,
+        condIdx: number,
+        payload: any,
+        nowEpochSec: number
+    ): boolean {
+        const edge = cond.edge ?? "level";
+        const cooldown = cond.cooldownSec ?? 0;
+
+        const key = this.computeConditionKey(event, cond, condIdx, payload);
+        const st = this.conditionState[key] || { prevMatch: false, lastSentAt: 0 };
+
+        let allow = false;
+
+        if (edge === "rising") {
+            allow = !st.prevMatch;
+            st.prevMatch = true;
+        } else {
+            allow = true;
+            st.prevMatch = true;
+        }
+
+        if (allow && cooldown > 0) {
+            if ((nowEpochSec - st.lastSentAt) < cooldown) {
+                allow = false;
+            }
+        }
+
+        if (allow) {
+            st.lastSentAt = nowEpochSec;
+        }
+
+        this.conditionState[key] = st;
+        return allow;
+    }
+
+    /** ====================== Helpers: Keys, Time, Deps ====================== */
+
+    protected computeStatusKey(event: EventItem, payload: any): string | null {
+        if (event.dynamic) return null;
+        if (event.stateKey && typeof event.stateKey === "string" && event.stateKey.trim()) {
+            return EventUtils.interpolate(event.stateKey, payload) + "::" + event.subject;
+        }
+        return event.subject;
     }
 
     protected isInActiveHours(event: EventItem): boolean {
@@ -205,8 +312,8 @@ export class Watcher extends BaseClassLog {
         const minutes = now.getHours() * 60 + now.getMinutes();
 
         return event.activeHours.some(({ from, to }) => {
-            const [fh, fm] = from.split(":" ).map(Number);
-            const [th, tm] = to.split(":" ).map(Number);
+            const [fh, fm] = from.split(":").map(Number);
+            const [th, tm] = to.split(":").map(Number);
             const fromMin = fh * 60 + fm;
             const toMin = th * 60 + tm;
             return fromMin <= toMin
@@ -224,66 +331,40 @@ export class Watcher extends BaseClassLog {
                 return false;
             }
             const [watchId, subject] = parts;
-            const actual = this.normalizeValue(GlobalEventStore.get(watchId, subject));
-            const expected = this.normalizeValue(dep.state);
+            const actual = EventUtils.normalizeValue(GlobalEventStore.get(watchId, subject));
+            const expected = EventUtils.normalizeValue(dep.state);
             const result = actual === expected;
             this.log("debug", `Dependency check: ${dep.path} = ${actual}, expected ${dep.state} → ${result}`, this.messageListId);
             return result;
         });
     }
 
-    protected executeConditionHandler(condition: EventCondition, event: EventItem, eventValue: string) {
-        this.log("info", condition.log, this.messageListId);
+    /** ====================== Warning & Reset Handlers (stateful only) ====================== */
 
-        if (this.eventStatus[event.subject].lastValue !== eventValue) {
-            this.msgSvc!.sendNotifications(this.messageListId!, condition.message, condition.severity ?? "info");
-        } else {
-            this.log("debug", `Duplicate event value '${eventValue}' for subject '${event.subject}', no immediate notification sent`, this.messageListId);
-        }
+    protected warningConditionHandler(event: EventItem, statusKey: string, warningValue: string, condition: EventCondition) {
+        this.log("info", `Threshold for '${statusKey}' reached, evaluating warning condition`, this.messageListId);
 
-        if (condition.warningThreshold && condition.warningThreshold > 0) {
-            this.log("debug", `Setting warning threshold of ${condition.warningThreshold} seconds for '${event.subject}'`, this.messageListId);
+        const st = this.eventStatus[statusKey];
+        if (!st) return;
 
-            if (this.eventStatus[event.subject].warningTimeout == null)
-                this.eventStatus[event.subject].warningTimeout = setTimeout(
-                    this.warningConditionHandler.bind(this, event, eventValue, condition),
-                    condition.warningThreshold * 1000
-                );
-        } else {
-            if (this.eventStatus[event.subject].warningTimeout != null)
-                clearTimeout(this.eventStatus[event.subject].warningTimeout!);
-            this.eventStatus[event.subject].warningTimeout = null;
-            this.eventStatus[event.subject].warningDone = false;
-        }
-
-        if (this.eventStatus[event.subject].resetTimeout != null)
-            clearTimeout(this.eventStatus[event.subject].resetTimeout!);
-        this.eventStatus[event.subject].resetTimeout = null;
-
-        if (condition.reset && condition.reset > 0)
-            this.eventStatus[event.subject].resetTimeout = setTimeout(this.resetLastValueHandler.bind(this, event), condition.reset * 1000);
-    }
-
-    protected warningConditionHandler(event: EventItem, warningValue: string, condition: EventCondition) {
-        this.log("info", `Threshold for '${event.subject}' reached, evaluating warning condition`, this.messageListId);
-
-        if (this.eventStatus[event.subject].warningTimeout != null && !this.eventStatus[event.subject].warningDone) {
-            if (this.eventStatus[event.subject].lastValue === warningValue) {
+        if (st.warningTimeout != null && !st.warningDone) {
+            if (st.lastValue === warningValue) {
                 this.msgSvc!.sendNotifications(
                     this.messageListId!,
                     condition.warningMessage ?? condition.message,
                     condition.warningSeverity ?? "warning"
                 );
             } else {
-                this.log("info", `Skipping warning: current value '${this.eventStatus[event.subject].lastValue}' differs from warning value '${warningValue}'`, this.messageListId);
+                this.log("info", `Skipping warning: current value '${st.lastValue}' differs from warning value '${warningValue}'`, this.messageListId);
             }
-
-            this.eventStatus[event.subject].warningDone = true;
+            st.warningDone = true;
         }
     }
 
-    protected resetLastValueHandler(event: EventItem) {
-        this.log("debug", `Resetting last value for '${event.subject}' to default '${event.default}'`, this.messageListId);
-        this.eventStatus[event.subject].lastValue = String(event.default);
+    protected resetLastValueHandler(event: EventItem, statusKey: string) {
+        const st = this.eventStatus[statusKey];
+        if (!st) return;
+        this.log("debug", `Resetting last value for '${statusKey}' to default '${event.default}'`, this.messageListId);
+        st.lastValue = String(event.default);
     }
 }
