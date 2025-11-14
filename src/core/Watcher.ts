@@ -104,7 +104,7 @@ export class Watcher extends BaseClassLog {
         });
 
         this.client.on("message", (topic: string, message: buffer.Buffer) => {
-            this.log("info", `MQTT new topic message from '${topic}': ${message.toString().trim()}`, this.messageListId);
+            this.log("debug", `MQTT new topic message from '${topic}': ${message.toString().trim()}`, this.messageListId);
 
             let data: Record<string, any> | null = null;
             try {

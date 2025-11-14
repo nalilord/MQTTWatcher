@@ -13,16 +13,26 @@ if(process.env.LOG_PATH) {
     }
 }
 
+const LOG_LEVEL = process.env.LOG_LEVEL || 'debug';
+
 export const logger: Logger = winston.createLogger({
-    level: 'debug',
+    level: LOG_LEVEL,
     format: combine(
-        timestamp({format: 'YYYY-MM-DD HH:mm:ss.SSS'}),
+        timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
         printf((info: any) => `[${info.timestamp}] <${info.level}> (${info.module}): ${info.message}`)
     ),
     defaultMeta: {
         module: "<none>",
     },
-    transports: [new winston.transports.Console(), new winston.transports.File({ filename: path.join(logDir, '/log.txt') })]
+    transports: [
+        new winston.transports.Console({
+            level: LOG_LEVEL
+        }),
+        new winston.transports.File({
+            level: LOG_LEVEL,
+            filename: path.join(logDir, '/log.txt')
+        })
+    ]
 });
 
 export abstract class BaseClassLog {
